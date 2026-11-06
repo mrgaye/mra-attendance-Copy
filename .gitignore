@@ -1,0 +1,29 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Databases and associated files
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
+
+# Secrets and environment configuration
+.session_secret
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Private employee attendance data
+private_data/
+attendance_photos/
+
+# Local development files
+.DS_Store
+.pytest_cache/
