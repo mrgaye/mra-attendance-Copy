@@ -23,9 +23,23 @@ def initialize_database():
                 branch TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 must_change_pin INTEGER NOT NULL DEFAULT 1,
+                auth_version INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Safely upgrade older databases.
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(employees)")
+        }
+
+        if "auth_version" not in columns:
+            conn.execute(
+                "ALTER TABLE employees "
+                "ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1"
+            )
+
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS attendance (
