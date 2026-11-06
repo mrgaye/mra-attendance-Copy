@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from io import BytesIO
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -5,10 +6,15 @@ import base64
 import binascii
 import secrets
 
-PHOTO_DIR = (
-    Path(__file__).resolve().parent
-    / "private_data"
-    / "attendance_photos"
+PHOTO_DIR = Path(
+    os.environ.get(
+        "MRA_PHOTO_DIR",
+        str(
+            Path(__file__).resolve().parent
+            / "private_data"
+            / "attendance_photos"
+        )
+    )
 )
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024

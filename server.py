@@ -40,9 +40,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Development-only session key. Sessions reset when server restarts.
 app.add_middleware(
     SessionMiddleware,
-    secret_key=Path(__file__).with_name(".session_secret").read_text().strip(),
+    secret_key=(
+        os.environ.get("MRA_SESSION_SECRET")
+        or Path(__file__).with_name(".session_secret").read_text().strip()
+    ),
     same_site="lax",
-    https_only=False,
+    https_only=os.environ.get("MRA_PRODUCTION") == "1",
     max_age=3600
 )
 
