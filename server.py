@@ -696,7 +696,17 @@ async def reset_employee_pin_route(request: Request):
 def employees_page(request: Request):
     require_gm(request)
 
-    employees = list_employees()
+    search = request.query_params.get("search", "").strip()
+    branch_filter = request.query_params.get("branch", "")
+    role_filter = request.query_params.get("role", "")
+    status_filter = request.query_params.get("status", "")
+
+    employees = list_employees(
+        search=search,
+        branch=branch_filter,
+        role=role_filter,
+        status=status_filter,
+    )
 
     rows = ""
 
@@ -844,6 +854,13 @@ def employees_page(request: Request):
         for b in BRANCHES
     )
 
+    filter_branch_options = "".join(
+        f'<option value="{escape(b, quote=True)}"'
+        f'{" selected" if branch_filter == b else ""}>'
+        f'{escape(b)}</option>'
+        for b in BRANCHES
+    )
+
     return HTMLResponse(page(f"""
         <div class="card" style="max-width:850px">
             <h1>Employee Management</h1>
@@ -877,6 +894,42 @@ def employees_page(request: Request):
             </form>
 
             <h3>Registered Employees</h3>
+
+            <form action="/employees" method="get">
+                <label>Search Employee</label>
+                <input type="search" name="search"
+                       placeholder="Name or phone number"
+                       value="{escape(search, quote=True)}">
+
+                <label>Branch</label>
+                <select name="branch">
+                    <option value="">All Branches</option>
+                    {filter_branch_options}
+                </select>
+
+                <label>Role</label>
+                <select name="role">
+                    <option value="">All Roles</option>
+                    <option value="STAFF"
+                        {"selected" if role_filter == "STAFF" else ""}>Staff</option>
+                    <option value="MANAGER"
+                        {"selected" if role_filter == "MANAGER" else ""}>Manager</option>
+                </select>
+
+                <label>Status</label>
+                <select name="status">
+                    <option value="">All Statuses</option>
+                    <option value="active"
+                        {"selected" if status_filter == "active" else ""}>Active</option>
+                    <option value="inactive"
+                        {"selected" if status_filter == "inactive" else ""}>Inactive</option>
+                </select>
+
+                <button type="submit">Search Employees</button>
+                <p><a href="/employees">Clear Filters</a></p>
+            </form>
+
+            <p>Employees found: {len(employees)}</p>
 
             <div style="overflow-x:auto">
                 <table border="1" cellpadding="10"

@@ -51,7 +51,28 @@ def register_employee(name, phone, role, branch):
     return employee_id, temporary_pin
 
 
-def list_employees():
+def list_employees(search="", branch="", role="", status=""):
+    search = search.strip().casefold()
+    employees = _list_all_employees()
+
+    return [
+        employee for employee in employees
+        if (
+            not search
+            or search in employee["full_name"].casefold()
+            or search in employee["phone_number"].casefold()
+        )
+        and (not branch or employee["branch"] == branch)
+        and (not role or employee["role"] == role)
+        and (
+            not status
+            or (status == "active" and employee["is_active"])
+            or (status == "inactive" and not employee["is_active"])
+        )
+    ]
+
+
+def _list_all_employees():
     with get_connection() as conn:
         rows = conn.execute("""
             SELECT id, full_name, phone_number,
