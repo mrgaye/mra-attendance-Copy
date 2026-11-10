@@ -27,3 +27,20 @@ attendance_photos/
 # Local development files
 .DS_Store
 .pytest_cache/
+
+# Local backups and development snapshots
+backups/
+certs/
+certs_backup_before_https_fix/
+*_backup.py
+*_before_*.py
+*.py.before_*
+*.py.step*_backup
+*.bak
+
+# Local logs
+*.log
+
+# Local migration authorization and policies
+mra_postgresql_commit_authorization.py
+mra_postgresql_import_policy.json
