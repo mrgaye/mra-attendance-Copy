@@ -9,20 +9,22 @@ def main():
     initialize_database()
 
     with get_connection() as conn:
-        conn.executemany(
-            """
-            INSERT OR IGNORE INTO branches
-                (name, latitude, longitude, gps_radius_metres)
-            VALUES (?, ?, ?, ?)
-            """,
-            [
-                ("SHOP-01 Senegambia", None, None, 100),
-                ("SHOP-02 Jambangjelly", None, None, 100),
-                ("SHOP-03 BB Kotu", 13.464111, -16.703667, 100),
-            ],
-        )
+        branches = [
+            ("SHOP-01 Senegambia", None, None, 100),
+            ("SHOP-02 Jambangjelly", None, None, 100),
+            ("SHOP-03 BB Kotu", 13.464111, -16.703667, 100),
+        ]
+        for branch in branches:
+            conn.execute(
+                """
+                INSERT INTO branches
+                    (name, latitude, longitude, gps_radius_metres)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                branch,
+            )
         conn.commit()
-
     print("Cloud setup: MRA branches initialized.")
 
     with get_connection() as conn:

@@ -139,7 +139,7 @@ def review_gps_exception(
     now = datetime.now(timezone.utc).isoformat()
 
     with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (int(request_id),))
 
         manager = conn.execute("""
             SELECT role, branch, is_active, must_change_pin

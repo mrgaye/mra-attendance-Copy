@@ -1,5 +1,5 @@
 import secrets
-import sqlite3
+from psycopg2 import IntegrityError
 
 from auth import hash_pin, normalize_phone
 from database import get_connection
@@ -43,7 +43,7 @@ def register_employee(name, phone, role, branch):
                 branch
             ))
             employee_id = cursor.lastrowid
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         raise ValueError(
             "This phone number is already registered."
         )
@@ -131,7 +131,7 @@ def update_employee(employee_id, name, phone, role, branch):
                 employee_id
             ))
 
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         raise ValueError(
             "This phone number is already registered."
         )

@@ -1,152 +1,97 @@
-import sqlite3
-import os
+"""PostgreSQL database adapter for the MRA attendance app.
 
-DATABASE = os.environ.get("MRA_DATABASE", "mra_attendance.db")
+Requires DATABASE_URL in the environment. Does not connect to SQLite.
+"""
+import os
+import re
+from contextlib import contextmanager
+import psycopg2
+from psycopg2.extras import DictCursor
+
+_INSERT = re.compile(r"^\s*INSERT\s+INTO\s+", re.I)
+
+class Result:
+    def __init__(self, cursor, lastrowid=None):
+        self._cursor = cursor
+        self.lastrowid = lastrowid
+    def fetchone(self):
+        return self._cursor.fetchone()
+    def fetchall(self):
+        return self._cursor.fetchall()
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+class Connection:
+    def __init__(self, raw):
+        self.raw = raw
+    def execute(self, sql, params=()):
+        if sql.strip().upper() == "BEGIN IMMEDIATE":
+            return None  # psycopg2 begins transactions automatically
+        sql = sql.replace("?", "%s")
+        insert = bool(_INSERT.match(sql))
+        if insert and "RETURNING" not in sql.upper():
+            if re.match(r"^\s*INSERT\s+INTO\s+attendance_photos\b", sql, re.I):
+                sql = sql.rstrip().rstrip(";") + " RETURNING filename"
+            else:
+                sql = sql.rstrip().rstrip(";") + " RETURNING id"
+        cursor = self.raw.cursor(cursor_factory=DictCursor)
+        cursor.execute(sql, tuple(params))
+        lastrowid = None
+        if insert:
+            record = cursor.fetchone()
+            lastrowid = record[0] if record else None
+        return Result(cursor, lastrowid)
+    def commit(self):
+        self.raw.commit()
+    def rollback(self):
+        self.raw.rollback()
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self.raw.commit()
+            else:
+                self.raw.rollback()
+        finally:
+            self.raw.close()
+
 
 def get_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL must be set to the Supabase PostgreSQL connection string")
+    from urllib.parse import urlsplit, unquote
+
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("postgresql", "postgres"):
+        raise ValueError("DATABASE_URL must be a PostgreSQL URL")
+
+    return Connection(psycopg2.connect(
+        host=parsed.hostname,
+        port=parsed.port or 5432,
+        dbname=parsed.path.lstrip("/"),
+        user=unquote(parsed.username or ""),
+        password=unquote(parsed.password or ""),
+        connect_timeout=12,
+        sslmode="require"
+    ))
+
 
 def initialize_database():
+    # Existing five Supabase staging tables are retained. No destructive migrations.
     with get_connection() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS employees (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                full_name TEXT NOT NULL,
-                phone_number TEXT NOT NULL UNIQUE,
-                pin_hash TEXT NOT NULL,
-                role TEXT NOT NULL CHECK (
-                    role IN ('CEO', 'GM', 'MANAGER', 'STAFF')
-                ),
-                branch TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                must_change_pin INTEGER NOT NULL DEFAULT 1,
-                auth_version INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Safely upgrade older databases.
-        columns = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(employees)")
-        }
-
-        if "auth_version" not in columns:
-            conn.execute(
-                "ALTER TABLE employees "
-                "ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1"
-            )
-
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS attendance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id INTEGER NOT NULL,
-                branch TEXT NOT NULL,
-                clock_in TEXT NOT NULL,
-                clock_out TEXT,
-                verification_status TEXT NOT NULL DEFAULT 'PENDING',
-                verified_by INTEGER,
-                verified_at TEXT,
-                gps_latitude REAL,
-                gps_longitude REAL,
-                gps_accuracy REAL,
-                gps_distance REAL,
-                gps_verification_level TEXT,
-                FOREIGN KEY (employee_id) REFERENCES employees(id),
-                FOREIGN KEY (verified_by) REFERENCES employees(id)
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS transfers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id INTEGER NOT NULL,
-                destination_branch TEXT NOT NULL,
-                start_date TEXT NOT NULL,
-                end_date TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'PENDING',
-                approved_by INTEGER,
-                FOREIGN KEY (employee_id) REFERENCES employees(id),
-                FOREIGN KEY (approved_by) REFERENCES employees(id)
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS branches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                latitude REAL,
-                longitude REAL,
-                gps_radius_metres INTEGER NOT NULL DEFAULT 100,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
-                CHECK (longitude IS NULL OR longitude BETWEEN -180 AND 180),
-                CHECK ((latitude IS NULL) = (longitude IS NULL)),
-                CHECK (gps_radius_metres > 0),
-                CHECK (is_active IN (0, 1))
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS gps_exception_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id INTEGER NOT NULL,
-                branch TEXT NOT NULL,
-                request_type TEXT NOT NULL DEFAULT 'CLOCK_IN',
-                requested_at TEXT NOT NULL,
-                gps_latitude REAL,
-                gps_longitude REAL,
-                gps_accuracy REAL,
-                gps_distance REAL,
-                reason TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'PENDING'
-                    CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
-                reviewed_by INTEGER,
-                reviewed_at TEXT,
-                review_notes TEXT,
-                attendance_id INTEGER,
-                confirmed_arrival_at TEXT,
-                FOREIGN KEY (employee_id) REFERENCES employees(id),
-                FOREIGN KEY (reviewed_by) REFERENCES employees(id),
-                FOREIGN KEY (attendance_id) REFERENCES attendance(id)
-            )
-        """)
-
-        # Add GPS columns to older attendance databases.
-        existing_columns = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(attendance)")
-        }
-
-        gps_columns = {
-            "gps_latitude": "REAL",
-            "gps_longitude": "REAL",
-            "gps_accuracy": "REAL",
-            "gps_distance": "REAL",
-            "gps_verification_level": "TEXT",
-            "clock_in_photo": "TEXT",
-            "clock_out_photo": "TEXT",
-        }
-
-        for name, column_type in gps_columns.items():
-            if name not in existing_columns:
-                conn.execute(
-                    f"ALTER TABLE attendance ADD COLUMN {name} {column_type}"
-                )
-
-        # Allow only one pending GPS exception per employee.
-        conn.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS
-                idx_one_pending_gps_exception_per_employee
-            ON gps_exception_requests(employee_id)
-            WHERE status = 'PENDING'
-        """)
-
+        conn.execute("""CREATE TABLE IF NOT EXISTS attendance_photos (
+            filename TEXT PRIMARY KEY,
+            image_data BYTEA NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""")
+        for table in ("employees", "attendance", "transfers", "branches", "gps_exception_requests"):
+            found = conn.execute("SELECT to_regclass(%s)", ("public." + table,)).fetchone()[0]
+            if found is None:
+                raise RuntimeError(f"Required staging table missing: {table}")
 
 if __name__ == "__main__":
     initialize_database()
-    print("MRA Attendance database created successfully!")
+    print("PostgreSQL connection initialized")

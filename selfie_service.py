@@ -88,15 +88,24 @@ def save_selfie(image_data, action):
     ):
         raise ValueError("Uploaded attendance selfie is not a valid image.")
 
-    PHOTO_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    PHOTO_DIR.chmod(0o700)
-
+    from database import get_connection
     filename = f"{action}_{secrets.token_hex(20)}.jpg"
-    destination = PHOTO_DIR / filename
-
-    with destination.open("xb") as file:
-        file.write(output.getvalue())
-
-    destination.chmod(0o600)
-
+    with get_connection() as conn:
+        conn.execute("INSERT INTO attendance_photos (filename, image_data) VALUES (?, ?)",
+                     (filename, output.getvalue()))
     return filename
+
+
+def delete_selfie(filename):
+    from database import get_connection
+    with get_connection() as conn:
+        conn.execute("DELETE FROM attendance_photos WHERE filename = ?", (filename,))
+
+
+def read_selfie(filename):
+    from database import get_connection
+    with get_connection() as conn:
+        row = conn.execute("SELECT image_data FROM attendance_photos WHERE filename = ?", (filename,)).fetchone()
+    if not row:
+        raise FileNotFoundError("Attendance photograph unavailable")
+    return bytes(row[0])

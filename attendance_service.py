@@ -138,7 +138,7 @@ def gps_verification_level(accuracy):
 
 
 def clock_in(employee_id, branch, latitude, longitude, accuracy, selfie_data):
-    from selfie_service import save_selfie, PHOTO_DIR
+    from selfie_service import save_selfie, delete_selfie
 
     now = datetime.now(timezone.utc)
     today = now.date().isoformat()
@@ -154,7 +154,7 @@ def clock_in(employee_id, branch, latitude, longitude, accuracy, selfie_data):
 
     try:
         with get_connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (int(employee_id),))
 
             open_shift = conn.execute("""
                 SELECT id FROM attendance
@@ -191,21 +191,21 @@ def clock_in(employee_id, branch, latitude, longitude, accuracy, selfie_data):
 
     except Exception:
         if filename:
-            (PHOTO_DIR / filename).unlink(missing_ok=True)
+            delete_selfie(filename)
         raise
 
     return distance
 
 
 def clock_out(employee_id, latitude, longitude, accuracy, selfie_data):
-    from selfie_service import save_selfie, PHOTO_DIR
+    from selfie_service import save_selfie, delete_selfie
 
     now = datetime.now(timezone.utc)
     filename = None
 
     try:
         with get_connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (int(employee_id),))
 
             shift = conn.execute("""
                 SELECT id, branch FROM attendance
@@ -240,7 +240,7 @@ def clock_out(employee_id, latitude, longitude, accuracy, selfie_data):
 
     except Exception:
         if filename:
-            (PHOTO_DIR / filename).unlink(missing_ok=True)
+            delete_selfie(filename)
         raise
 
     return True

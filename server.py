@@ -1,4 +1,4 @@
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from attendance_photo_access import authorized_attendance_photo
 from fastapi.staticfiles import StaticFiles
 from gps_exception_service import (
@@ -1595,14 +1595,21 @@ def attendance_page(request: Request):
         status.textContent = "Requesting front camera permission...";
 
         try {{
-            selfieStream = await navigator.mediaDevices.getUserMedia({{
-                audio: false,
-                video: {{
-                    facingMode: "user",
-                    width: {{ ideal: 640 }},
-                    height: {{ ideal: 480 }}
-                }}
-            }});
+            try {{
+                selfieStream = await navigator.mediaDevices.getUserMedia({{
+                    audio: false,
+                    video: {{
+                        facingMode: "user",
+                        width: {{ ideal: 640 }},
+                        height: {{ ideal: 480 }}
+                    }}
+                }});
+            }} catch (preferredCameraError) {{
+                selfieStream = await navigator.mediaDevices.getUserMedia({{
+                    audio: false,
+                    video: true
+                }});
+            }}
 
             video.srcObject = selfieStream;
             video.style.display = "block";
@@ -2488,8 +2495,8 @@ def manager_attendance_photo(
             detail="Attendance photograph unavailable."
         )
 
-    return FileResponse(
-        path=photo_path,
+    return Response(
+        content=photo_path,
         media_type="image/jpeg",
         headers={
             "Cache-Control": "no-store, private",

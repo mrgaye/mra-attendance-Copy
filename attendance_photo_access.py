@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from database import get_connection
-from selfie_service import PHOTO_DIR
+from selfie_service import read_selfie
 
 
 def authorized_attendance_photo(manager_id, attendance_id, action):
@@ -75,13 +75,4 @@ def authorized_attendance_photo(manager_id, attendance_id, action):
     ):
         raise ValueError("Invalid stored photograph filename.")
 
-    directory = PHOTO_DIR.resolve()
-    photo_path = (directory / filename).resolve()
-
-    if photo_path.parent != directory:
-        raise ValueError("Invalid photograph storage path.")
-
-    if not photo_path.is_file():
-        raise FileNotFoundError("Attendance photograph unavailable.")
-
-    return photo_path
+    return read_selfie(filename)
