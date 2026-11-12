@@ -3719,3 +3719,16 @@ def manager_gps_exceptions_page(request: Request):
             </a></p>
         </div>
     """))
+
+# Redirect expired browser sessions to login.
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+@app.exception_handler(StarletteHTTPException)
+async def handle_authentication_error(request: Request, exc: StarletteHTTPException):
+    if exc.status_code == 401 and request.method in ("GET", "HEAD"):
+        accepts_html = "text/html" in request.headers.get("accept", "")
+        if accepts_html:
+            return RedirectResponse("/", status_code=303)
+
+    return await http_exception_handler(request, exc)
