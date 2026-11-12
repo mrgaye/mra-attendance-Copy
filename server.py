@@ -37,6 +37,13 @@ app = FastAPI(title="MRA Staff Attendance")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+@app.middleware("http")
+async def pwa_service_worker_scope(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/static/sw.js":
+        response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
 # Development-only session key. Sessions reset when server restarts.
 app.add_middleware(
     SessionMiddleware,
@@ -64,6 +71,12 @@ def page(content):
         <meta name="viewport"
               content="width=device-width, initial-scale=1">
         <title>MRA Staff Attendance</title>
+        <link rel="manifest" href="/static/manifest.json">
+        <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+        <meta name="theme-color" content="#163b65">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="default">
+        <meta name="apple-mobile-web-app-title" content="MRA Attendance">
         <style>
             * {{ box-sizing: border-box; }}
             body {{
@@ -108,7 +121,18 @@ def page(content):
             a {{ color: #17365d; }}
         </style>
     </head>
-    <body>{content}</body>
+    <body>{content}
+        <script>
+            if ("serviceWorker" in navigator) {{
+                window.addEventListener("load", function() {{
+                    navigator.serviceWorker.register("/static/sw.js", {{ scope: "/" }})
+                        .catch(function(error) {{
+                            console.error("Service worker registration failed:", error);
+                        }});
+                }});
+            }}
+        </script>
+    </body>
     </html>
     """
 
