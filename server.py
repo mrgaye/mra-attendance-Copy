@@ -382,12 +382,14 @@ def dashboard(request: Request):
             ("/reports", "Attendance Reports", "Review attendance records"),
             ("/manager/attendance", "Manager Verification", "Review attendance"),
             ("/manager/gps-exceptions", "GPS Exceptions", "Review GPS requests"),
+            ("/manager/clockout-corrections", "Clock-Out Corrections", "Review forgotten clock-out requests"),
         ])
     elif role == "MANAGER":
         navigation.extend([
             ("/manager/dashboard", "Manager Dashboard", "Branch attendance overview"),
             ("/manager/attendance", "Manager Verification", "Review attendance"),
             ("/manager/gps-exceptions", "GPS Exceptions", "Review GPS requests"),
+            ("/manager/clockout-corrections", "Clock-Out Corrections", "Review forgotten clock-out requests"),
         ])
 
     links = "".join(
@@ -1256,6 +1258,16 @@ else:
 
 from fastapi import HTTPException
 from attendance_service import clock_in, clock_out
+from attendance_correction_service import (
+    get_open_shift,
+    get_employee_pending_correction,
+    submit_clock_out_correction,
+)
+
+from attendance_correction_service import (
+    pending_clock_out_corrections,
+    review_clock_out_correction,
+)
 
 def attendance_employee(request):
     employee_id = request.session.get("employee_id")
@@ -1281,6 +1293,13 @@ def attendance_employee(request):
 @app.get("/attendance", response_class=HTMLResponse)
 def attendance_page(request: Request):
     employee = attendance_employee(request)
+
+    # Forgotten Clock-Out Correction status
+    open_shift = get_open_shift(employee["id"])
+    pending_correction = (
+        get_employee_pending_correction(employee["id"])
+        if open_shift else None
+    )
 
     with get_connection() as conn:
         records = conn.execute("""
@@ -1308,6 +1327,54 @@ def attendance_page(request: Request):
         employee["id"],
         datetime.now(timezone.utc).date().isoformat()
     )
+
+
+    correction_panel = ""
+
+    if open_shift:
+        if pending_correction:
+            correction_panel = """
+            <div class="attendance-panel">
+                <h2>Forgotten Clock-Out</h2>
+                <p><strong>Awaiting Manager Approval</strong></p>
+                <p>Your correction request has been submitted.
+                   Your unfinished shift will remain open until
+                   an authorized manager or GM approves it.</p>
+            </div>
+            """
+        else:
+            correction_panel = f"""
+            <div class="attendance-panel">
+                <h2>Forgotten Clock-Out?</h2>
+                <p>If you forgot to clock out, enter the actual
+                   time you finished work and explain what happened.</p>
+                <p>Your manager or GM must approve the request.
+                   Your attendance will not change automatically.</p>
+                <form id="forgotten-clockout-form"
+                      action="/attendance/correction/request"
+                      method="post">
+                    {csrf_input(request)}
+                    <label for="requested-clockout">
+                        Actual Departure Date and Time
+                    </label>
+                    <input type="datetime-local"
+                           id="requested-clockout"
+                           name="requested_time"
+                           required>
+                    <label for="clockout-correction-reason">
+                        Reason for Forgotten Clock-Out
+                    </label>
+                    <textarea id="clockout-correction-reason"
+                              name="reason"
+                              maxlength="500"
+                              required
+                              placeholder="Explain why you forgot to clock out"></textarea>
+                    <button type="submit">
+                        Submit Correction Request
+                    </button>
+                </form>
+            </div>
+            """
 
     return HTMLResponse(page(f"""
     <style>
@@ -1634,6 +1701,7 @@ def attendance_page(request: Request):
             </form>
         </div>
 
+        {correction_panel}
         <div class="attendance-panel">
             <h2>Recent Attendance History</h2>
             <div class="attendance-table-wrap">
@@ -2048,6 +2116,40 @@ def attendance_in(
         </div>
     """))
 
+
+
+@app.post("/attendance/correction/request")
+def attendance_correction_request(
+    request: Request,
+    requested_time: str = Form(...),
+    reason: str = Form(...),
+    csrf_token: str = Form("")
+):
+    validate_csrf(request, csrf_token)
+    employee = attendance_employee(request)
+
+    try:
+        request_id = submit_clock_out_correction(
+            employee["id"],
+            requested_time,
+            reason
+        )
+        message = (
+            f"Clock-Out Correction Request #{request_id} submitted. "
+            "Status: PENDING. Your manager or GM must review "
+            "and approve the request before your unfinished "
+            "attendance shift can be closed."
+        )
+    except ValueError as error:
+        message = str(error)
+
+    return HTMLResponse(page(f"""
+        <div class="card">
+            <h2>Clock-Out Correction Request Result</h2>
+            <p>{escape(message)}</p>
+            <a href="/attendance">Back to Attendance</a>
+        </div>
+    """))
 
 
 @app.post("/attendance/gps-exception")
@@ -2666,6 +2768,120 @@ def manager_attendance_photo(
             "Content-Disposition": "inline"
         }
     )
+
+
+
+@app.get("/manager/clockout-corrections", response_class=HTMLResponse)
+def manager_clockout_corrections_page(request: Request):
+    employee = attendance_employee(request)
+
+    try:
+        requests = pending_clock_out_corrections(employee["id"])
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail=str(error))
+
+    cards = []
+
+    for record in requests:
+        request_id = int(record["id"])
+
+        cards.append(f"""
+        <div class="card">
+            <h3>Correction Request #{request_id}</h3>
+            <p><strong>Employee:</strong>
+               {escape(str(record["full_name"]))}</p>
+            <p><strong>Branch:</strong>
+               {escape(str(record["branch"]))}</p>
+            <p><strong>Original Clock-In:</strong>
+               {escape(str(record["original_clock_in"]))}</p>
+            <p><strong>Requested Clock-Out:</strong>
+               {escape(str(record["requested_clock_out"]))}</p>
+            <p><strong>Reason:</strong>
+               {escape(str(record["reason"]))}</p>
+            <p><strong>Submitted:</strong>
+               {escape(str(record["requested_at"]))}</p>
+
+            <form action="/manager/clockout-corrections/review"
+                  method="post">
+                {csrf_input(request)}
+                <input type="hidden"
+                       name="correction_id"
+                       value="{request_id}">
+
+                <label>Review Remarks</label>
+                <textarea name="remarks"
+                          maxlength="500"
+                          placeholder="Optional review notes"></textarea>
+
+                <button type="submit"
+                        name="decision"
+                        value="APPROVED">
+                    Approve Correction
+                </button>
+
+                <button type="submit"
+                        name="decision"
+                        value="REJECTED">
+                    Reject Correction
+                </button>
+            </form>
+        </div>
+        """)
+
+    content = "".join(cards) if cards else (
+        "<div class='card'>"
+        "<p>No pending clock-out correction requests.</p>"
+        "</div>"
+    )
+
+    return HTMLResponse(page(f"""
+        <div style="max-width:900px;margin:auto;">
+            <h1>Clock-Out Correction Requests</h1>
+            <p>Review employee requests to correct forgotten clock-outs.</p>
+            {content}
+            <p><a href="/dashboard">Back to Dashboard</a></p>
+        </div>
+    """))
+
+
+
+@app.post("/manager/clockout-corrections/review")
+def manager_clockout_correction_review(
+    request: Request,
+    correction_id: int = Form(...),
+    decision: str = Form(...),
+    remarks: str = Form(""),
+    csrf_token: str = Form("")
+):
+    validate_csrf(request, csrf_token)
+    employee = attendance_employee(request)
+
+    if employee["role"] not in ("MANAGER", "GM"):
+        raise HTTPException(status_code=403, detail="Manager or GM access required.")
+
+    try:
+        review_clock_out_correction(
+            employee["id"],
+            correction_id,
+            decision,
+            remarks
+        )
+        message = (
+            f"Correction Request #{correction_id} "
+            f"successfully {decision.lower()}."
+        )
+    except ValueError as error:
+        message = str(error)
+
+    return HTMLResponse(page(f"""
+        <div class="card">
+            <h2>Clock-Out Correction Review Result</h2>
+            <p>{escape(message)}</p>
+            <a href="/manager/clockout-corrections">
+                Back to Correction Requests
+            </a>
+        </div>
+    """))
 
 
 @app.get("/manager/attendance", response_class=HTMLResponse)
