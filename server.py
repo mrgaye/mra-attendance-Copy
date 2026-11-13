@@ -74,6 +74,7 @@ def page(content):
         <link rel="manifest" href="/static/manifest.json">
         <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
         <meta name="theme-color" content="#163b65">
+        <meta name="mobile-web-app-capable" content="yes">
         <meta name="apple-mobile-web-app-capable" content="yes">
         <meta name="apple-mobile-web-app-status-bar-style" content="default">
         <meta name="apple-mobile-web-app-title" content="MRA Attendance">
@@ -132,6 +133,69 @@ def page(content):
                 }});
             }}
         </script>
+        <script>
+            document.addEventListener("submit", function(event) {{
+                const form = event.target;
+
+                if (!(form instanceof HTMLFormElement)) return;
+                if (form.method.toLowerCase() !== "post") return;
+
+                if (["clockin", "clockout", "gps-exception"]
+                    .includes(form.id)) return;
+                if (form.getAttribute("action") === "/login") return;
+
+                if (event.defaultPrevented) return;
+
+                if (form.dataset.submitting === "true") {{
+                    event.preventDefault();
+                    return;
+                }}
+
+                const submitter = event.submitter;
+
+                if (submitter && submitter.disabled) {{
+                    event.preventDefault();
+                    return;
+                }}
+
+                form.dataset.submitting = "true";
+
+                const buttons = form.querySelectorAll(
+                    'button[type="submit"], input[type="submit"]'
+                );
+
+                buttons.forEach(function(button) {{
+                    button.setAttribute("aria-busy", "true");
+                    button.style.pointerEvents = "none";
+                }});
+
+                if (submitter && submitter.tagName === "BUTTON") {{
+                    submitter.dataset.originalText =
+                        submitter.textContent.trim();
+
+                    submitter.textContent = "Processing... Please wait";
+                }}
+            }});
+
+            window.addEventListener("pageshow", function() {{
+                document.querySelectorAll(
+                    'form[data-submitting="true"]'
+                ).forEach(function(form) {{
+                    delete form.dataset.submitting;
+
+                    form.querySelectorAll(
+                        'button[type="submit"], input[type="submit"]'
+                    ).forEach(function(button) {{
+                        button.removeAttribute("aria-busy");
+                        button.style.pointerEvents = "";
+                        if (button.dataset.originalText) {{
+                            button.textContent =
+                                button.dataset.originalText;
+                        }}
+                    }});
+                }});
+            }});
+        </script>
     </body>
     </html>
     """
@@ -167,8 +231,21 @@ def login_page(request, error=""):
                        autocomplete="current-password"
                        required>
 
-                <button type="submit">Sign In</button>
+                <button type="submit" id="login-submit">Sign In</button>
             </form>
+            <script>
+                document.querySelector('form[action="/login"]')
+                    .addEventListener("submit", function(event) {{
+                        const button = document.getElementById("login-submit");
+                        if (button.disabled) {{
+                            event.preventDefault();
+                            return;
+                        }}
+                        button.disabled = true;
+                        button.textContent = "Signing in... Please wait";
+                        button.setAttribute("aria-busy", "true");
+                    }});
+            </script>
         </div>
     """))
 
@@ -1739,8 +1816,30 @@ def attendance_page(request: Request):
         );
     }}
 
+    function setAttendanceLoading(formId, loading, message) {{
+        const form = document.getElementById(formId);
+        const button = form.querySelector('button');
+        if (!button.dataset.originalText) {{
+            button.dataset.originalText = button.textContent.trim();
+        }}
+        button.disabled = loading;
+        button.setAttribute("aria-busy", String(loading));
+        button.textContent = loading
+            ? message
+            : button.dataset.originalText;
+    }}
+
+    function attendanceIsLoading(formId) {{
+        return document.getElementById(formId)
+            .querySelector('button').disabled;
+    }}
+
     function checkIn() {{
         const status = document.getElementById("gps-status");
+
+        if (attendanceIsLoading("clockin")) {{
+            return;
+        }}
 
         if (!capturedSelfie ||
             !document.getElementById("clockin-selfie").value) {{
@@ -1748,10 +1847,14 @@ def attendance_page(request: Request):
                 "Please open the camera and capture your selfie before clocking in.";
             return;
         }}
+        setAttendanceLoading(
+            "clockin", true, "Checking GPS location..."
+        );
         status.textContent = "Checking your location...";
 
         if (!navigator.geolocation) {{
             status.textContent = "GPS not supported.";
+            setAttendanceLoading("clockin", false, "");
             return;
         }}
 
@@ -1769,11 +1872,15 @@ def attendance_page(request: Request):
                     " | Longitude: " + c.longitude +
                     " | Accuracy: " + c.accuracy + " metres";
                 
+                setAttendanceLoading(
+                    "clockin", true, "Submitting attendance... Please wait"
+                );
                 document.getElementById("clockin").submit();
             }},
             function(error) {{
                 status.textContent =
                     "Location unavailable: " + error.message;
+                setAttendanceLoading("clockin", false, "");
             }},
             {{
                 enableHighAccuracy: true,
@@ -1787,6 +1894,10 @@ def attendance_page(request: Request):
     function requestGPSException() {{
         const status = document.getElementById("gps-status");
         const form = document.getElementById("gps-exception");
+
+        if (attendanceIsLoading("gps-exception")) {{
+            return;
+        }}
         const reason = document.getElementById("exception-reason").value.trim();
 
         if (!reason) {{
@@ -1803,6 +1914,9 @@ def attendance_page(request: Request):
             '#clockin input[name="branch"]'
         ).value;
 
+        setAttendanceLoading(
+            "gps-exception", true, "Checking GPS location..."
+        );
         status.textContent = "Collecting GPS for exception request...";
 
         navigator.geolocation.getCurrentPosition(
@@ -1816,11 +1930,15 @@ def attendance_page(request: Request):
                     position.coords.accuracy;
 
                 status.textContent = "Submitting exception request...";
+                setAttendanceLoading(
+                    "gps-exception", true, "Submitting request... Please wait"
+                );
                 form.submit();
             }},
             function(error) {{
                 status.textContent =
                     "Unable to collect GPS: " + error.message;
+                setAttendanceLoading("gps-exception", false, "");
             }},
             {{
                 enableHighAccuracy: true,
@@ -1834,16 +1952,24 @@ def attendance_page(request: Request):
 
         const status = document.getElementById("gps-status");
 
+        if (attendanceIsLoading("clockout")) {{
+            return;
+        }}
+
         if (!capturedSelfie ||
             !document.getElementById("clockout-selfie").value) {{
             status.textContent =
                 "Please open the camera and capture your selfie before clocking out.";
             return;
         }}
+        setAttendanceLoading(
+            "clockout", true, "Checking GPS location..."
+        );
         status.textContent = "Checking GPS for clock-out...";
 
         if (!navigator.geolocation) {{
             status.textContent = "GPS not supported.";
+            setAttendanceLoading("clockout", false, "");
             return;
         }}
 
@@ -1858,11 +1984,15 @@ def attendance_page(request: Request):
                 document.getElementById("out-accuracy").value =
                     position.coords.accuracy;
 
+                setAttendanceLoading(
+                    "clockout", true, "Submitting attendance... Please wait"
+                );
                 document.getElementById("clockout").submit();
             }},
             function(error) {{
                 status.textContent =
                     "Location unavailable: " + error.message;
+                setAttendanceLoading("clockout", false, "");
             }},
             {{
                 enableHighAccuracy: true,
