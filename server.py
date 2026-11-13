@@ -1323,9 +1323,13 @@ def attendance_page(request: Request):
     from attendance_service import effective_branch
     from datetime import datetime, timezone
 
-    authorized = effective_branch(
-        employee["id"],
-        datetime.now(timezone.utc).date().isoformat()
+    authorized = (
+        effective_branch(
+            employee["id"],
+            datetime.now(timezone.utc).date().isoformat()
+        )
+        if employee["branch"] or employee["role"] != "GM"
+        else None
     )
 
 
@@ -1375,6 +1379,160 @@ def attendance_page(request: Request):
                 </form>
             </div>
             """
+
+    gps_panel_start = ""
+    gps_panel_end = ""
+
+    if not authorized:
+        gps_panel_start = """
+        <div class="attendance-panel">
+            <h2>GPS Attendance</h2>
+            <p>Your GM account has access to all branches.</p>
+            <p>GPS clock-in and clock-out require a specific
+               authorized branch. Contact the system administrator
+               to configure attendance access.</p>
+        </div>
+        """
+        gps_panel_end = ""
+
+    gps_controls = ""
+    if authorized:
+        gps_controls = f"""
+        <div class="attendance-panel">
+            <h2>Clock In / Clock Out</h2>
+            <p>Enable your phone's location services before proceeding.</p>
+
+            <div id="selfie-panel" style="
+                border:1px solid #dce5ed;
+                border-radius:12px;
+                padding:16px;
+                margin-bottom:18px;
+                text-align:center;
+            ">
+                <h3>Attendance Selfie Verification</h3>
+                <p>Take a live selfie before clocking in or out.
+                   Your photo will be stored privately for
+                   attendance verification.</p>
+
+                <video id="selfie-video"
+                       autoplay
+                       playsinline
+                       muted
+                       style="width:100%;max-width:360px;
+                              border-radius:12px;
+                              display:none;"></video>
+
+                <canvas id="selfie-canvas"
+                        style="display:none;"></canvas>
+
+                <img id="selfie-preview"
+                     alt="Captured attendance selfie"
+                     style="width:100%;max-width:360px;
+                            border-radius:12px;
+                            display:none;">
+
+                <div style="margin-top:12px;">
+                    <button type="button"
+                            onclick="startSelfieCamera()">
+                        Open Front Camera
+                    </button>
+
+                    <button type="button"
+                            onclick="captureSelfie()">
+                        Capture Selfie
+                    </button>
+
+                    <button type="button"
+                            onclick="retakeSelfie()">
+                        Retake Selfie
+                    </button>
+                </div>
+
+                <p id="selfie-status" class="muted">
+                    Camera not started.
+                </p>
+            </div>
+
+            <div class="attendance-actions">
+                <form id="clockin" action="/attendance/in" method="post">
+                    {csrf_input(request)}
+                    <label>Authorized Check-in Branch</label>
+                    <p><strong>{escape(authorized or 'Not assigned')}</strong></p>
+                    <input type="hidden"
+                           name="branch"
+                           value="{escape(authorized or '', quote=True)}">
+                    <input type="hidden" name="latitude" id="lat">
+                    <input type="hidden" name="longitude" id="lon">
+                    <input type="hidden" name="accuracy" id="accuracy">
+                    <input type="hidden"
+                           name="selfie_data"
+                           id="clockin-selfie">
+                    <button type="button"
+                            class="clockin-button"
+                            onclick="checkIn()">
+                        GPS Clock In
+                    </button>
+                </form>
+
+                <form id="clockout" action="/attendance/out" method="post">
+                    {csrf_input(request)}
+                    <p>Finish your current shift.</p>
+                    <input type="hidden" name="latitude" id="out-lat">
+                    <input type="hidden" name="longitude" id="out-lon">
+                    <input type="hidden" name="accuracy" id="out-accuracy">
+                    <input type="hidden"
+                           name="selfie_data"
+                           id="clockout-selfie">
+                    <button type="button"
+                            class="clockout-button"
+                            onclick="checkOut()">
+                        GPS Clock Out
+                    </button>
+                </form>
+            </div>
+
+            <button type="button"
+                    onclick="testGPSLocation()">
+                Test GPS Location
+            </button>
+            <p id="gps-status" class="muted"></p>
+        </div>
+
+        <div class="attendance-panel">
+            <h2>GPS Location Problem?</h2>
+            <p>If your GPS location is inaccurate, request
+               manager verification.</p>
+
+            <form id="gps-exception"
+                  action="/attendance/gps-exception"
+                  method="post">
+                {csrf_input(request)}
+
+                <label>Reason for GPS Exception</label>
+                <textarea name="reason"
+                          id="exception-reason"
+                          maxlength="500"
+                          required
+                          placeholder="Explain the GPS problem"></textarea>
+
+                <input type="hidden" name="branch"
+                       id="exception-branch">
+                <input type="hidden" name="latitude"
+                       id="exception-lat">
+                <input type="hidden" name="longitude"
+                       id="exception-lon">
+                <input type="hidden" name="accuracy"
+                       id="exception-accuracy">
+
+                <button type="button"
+                        class="exception-button"
+                        onclick="requestGPSException()">
+                    Request GPS Exception
+                </button>
+            </form>
+        </div>
+
+        """
 
     return HTMLResponse(page(f"""
     <style>
@@ -1567,140 +1725,11 @@ def attendance_page(request: Request):
                 {escape(employee['branch'] or 'All Branches')}</p>
         </div>
 
-        <div class="attendance-panel">
-            <h2>Clock In / Clock Out</h2>
-            <p>Enable your phone's location services before proceeding.</p>
-
-            <div id="selfie-panel" style="
-                border:1px solid #dce5ed;
-                border-radius:12px;
-                padding:16px;
-                margin-bottom:18px;
-                text-align:center;
-            ">
-                <h3>Attendance Selfie Verification</h3>
-                <p>Take a live selfie before clocking in or out.
-                   Your photo will be stored privately for
-                   attendance verification.</p>
-
-                <video id="selfie-video"
-                       autoplay
-                       playsinline
-                       muted
-                       style="width:100%;max-width:360px;
-                              border-radius:12px;
-                              display:none;"></video>
-
-                <canvas id="selfie-canvas"
-                        style="display:none;"></canvas>
-
-                <img id="selfie-preview"
-                     alt="Captured attendance selfie"
-                     style="width:100%;max-width:360px;
-                            border-radius:12px;
-                            display:none;">
-
-                <div style="margin-top:12px;">
-                    <button type="button"
-                            onclick="startSelfieCamera()">
-                        Open Front Camera
-                    </button>
-
-                    <button type="button"
-                            onclick="captureSelfie()">
-                        Capture Selfie
-                    </button>
-
-                    <button type="button"
-                            onclick="retakeSelfie()">
-                        Retake Selfie
-                    </button>
-                </div>
-
-                <p id="selfie-status" class="muted">
-                    Camera not started.
-                </p>
-            </div>
-
-            <div class="attendance-actions">
-                <form id="clockin" action="/attendance/in" method="post">
-                    {csrf_input(request)}
-                    <label>Authorized Check-in Branch</label>
-                    <p><strong>{escape(authorized)}</strong></p>
-                    <input type="hidden"
-                           name="branch"
-                           value="{escape(authorized, quote=True)}">
-                    <input type="hidden" name="latitude" id="lat">
-                    <input type="hidden" name="longitude" id="lon">
-                    <input type="hidden" name="accuracy" id="accuracy">
-                    <input type="hidden"
-                           name="selfie_data"
-                           id="clockin-selfie">
-                    <button type="button"
-                            class="clockin-button"
-                            onclick="checkIn()">
-                        GPS Clock In
-                    </button>
-                </form>
-
-                <form id="clockout" action="/attendance/out" method="post">
-                    {csrf_input(request)}
-                    <p>Finish your current shift.</p>
-                    <input type="hidden" name="latitude" id="out-lat">
-                    <input type="hidden" name="longitude" id="out-lon">
-                    <input type="hidden" name="accuracy" id="out-accuracy">
-                    <input type="hidden"
-                           name="selfie_data"
-                           id="clockout-selfie">
-                    <button type="button"
-                            class="clockout-button"
-                            onclick="checkOut()">
-                        GPS Clock Out
-                    </button>
-                </form>
-            </div>
-
-            <button type="button"
-                    onclick="testGPSLocation()">
-                Test GPS Location
-            </button>
-            <p id="gps-status" class="muted"></p>
-        </div>
-
-        <div class="attendance-panel">
-            <h2>GPS Location Problem?</h2>
-            <p>If your GPS location is inaccurate, request
-               manager verification.</p>
-
-            <form id="gps-exception"
-                  action="/attendance/gps-exception"
-                  method="post">
-                {csrf_input(request)}
-
-                <label>Reason for GPS Exception</label>
-                <textarea name="reason"
-                          id="exception-reason"
-                          maxlength="500"
-                          required
-                          placeholder="Explain the GPS problem"></textarea>
-
-                <input type="hidden" name="branch"
-                       id="exception-branch">
-                <input type="hidden" name="latitude"
-                       id="exception-lat">
-                <input type="hidden" name="longitude"
-                       id="exception-lon">
-                <input type="hidden" name="accuracy"
-                       id="exception-accuracy">
-
-                <button type="button"
-                        class="exception-button"
-                        onclick="requestGPSException()">
-                    Request GPS Exception
-                </button>
-            </form>
-        </div>
-
+        {gps_panel_start}
+        {"<!-- GPS_CONTROLS_START -->" if authorized else ""}
+        {gps_controls}
+        {"<!-- GPS_CONTROLS_END -->" if authorized else ""}
+        {gps_panel_end}
         {correction_panel}
         <div class="attendance-panel">
             <h2>Recent Attendance History</h2>
