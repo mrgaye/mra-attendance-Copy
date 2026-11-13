@@ -24,6 +24,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from auth import authenticate
 from database import get_connection, initialize_database
+from psycopg2.errors import UniqueViolation
 
 initialize_database()
 
@@ -2031,6 +2032,13 @@ def attendance_in(
         )
     except ValueError as error:
         message = str(error)
+    except UniqueViolation as error:
+        if error.diag.constraint_name != "attendance_one_open_shift_per_employee":
+            raise
+        message = (
+            "You are already clocked in. "
+            "Please clock out before starting another shift."
+        )
 
     return HTMLResponse(page(f"""
         <div class="card">
