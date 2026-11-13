@@ -2486,6 +2486,7 @@ def gm_dashboard(request: Request):
                 <a href="/reports">Attendance Reports</a>
                 <a href="/manager/attendance">Verify Attendance</a>
                 <a href="/manager/gps-exceptions">GPS Exceptions</a>
+                <a href="/manager/clockout-corrections">Clock-Out Corrections</a>
                 <a href="/manager/dashboard">Manager Dashboard</a>
                 <a href="/attendance">My GPS Attendance</a>
                 <a href="/dashboard">Main Dashboard</a>
