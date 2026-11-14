@@ -159,7 +159,7 @@ def clock_in(employee_id, branch, latitude, longitude, accuracy, selfie_data):
             open_shift = conn.execute("""
                 SELECT id FROM attendance
                 WHERE employee_id = ?
-                AND clock_out IS NULL
+                AND shift_status = 'ACTIVE'
                 LIMIT 1
             """, (employee_id,)).fetchone()
 
@@ -210,7 +210,7 @@ def clock_out(employee_id, latitude, longitude, accuracy, selfie_data):
             shift = conn.execute("""
                 SELECT id, branch FROM attendance
                 WHERE employee_id = ?
-                AND clock_out IS NULL
+                AND shift_status = 'ACTIVE'
                 ORDER BY id DESC
                 LIMIT 1
             """, (employee_id,)).fetchone()
@@ -229,8 +229,12 @@ def clock_out(employee_id, latitude, longitude, accuracy, selfie_data):
 
             cursor = conn.execute("""
                 UPDATE attendance
-                SET clock_out = ?, clock_out_photo = ?
-                WHERE id = ? AND clock_out IS NULL
+                SET clock_out = ?,
+                    clock_out_photo = ?,
+                    shift_status = 'CLOSED'
+                WHERE id = ?
+                  AND shift_status = 'ACTIVE'
+                  AND clock_out IS NULL
             """, (now.isoformat(), filename, shift["id"]))
 
             if cursor.rowcount != 1:

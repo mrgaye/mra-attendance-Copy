@@ -319,6 +319,7 @@ def dashboard(request: Request):
             FROM attendance
             WHERE employee_id = ?
               AND clock_out IS NULL
+              AND shift_status = 'ACTIVE'
             ORDER BY id DESC
             LIMIT 1
         """, (employee_id,)).fetchone()
@@ -1296,25 +1297,39 @@ def attendance_page(request: Request):
 
     # Forgotten Clock-Out Correction status
     open_shift = get_open_shift(employee["id"])
-    pending_correction = (
-        get_employee_pending_correction(employee["id"])
-        if open_shift else None
+    pending_correction = get_employee_pending_correction(
+        employee["id"]
     )
 
     with get_connection() as conn:
         records = conn.execute("""
             SELECT branch, clock_in, clock_out,
-                   verification_status
+                   verification_status, shift_status
             FROM attendance
             WHERE employee_id = ?
             ORDER BY id DESC LIMIT 10
+        """, (employee["id"],)).fetchall()
+
+        eligible_shifts = conn.execute("""
+            SELECT a.id, a.branch, a.clock_in, a.shift_status
+            FROM attendance a
+            WHERE a.employee_id = ?
+              AND a.clock_out IS NULL
+              AND a.shift_status IN ('ACTIVE', 'PENDING_CORRECTION')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM attendance_correction_requests c
+                  WHERE c.attendance_id = a.id
+                    AND c.status = 'PENDING'
+              )
+            ORDER BY a.clock_in DESC, a.id DESC
         """, (employee["id"],)).fetchall()
 
     rows = "".join(
         "<tr>"
         f"<td>{escape(r['branch'])}</td>"
         f"<td>{escape(r['clock_in'])}</td>"
-        f"<td>{escape(r['clock_out'] or 'Active')}</td>"
+        f"<td>{escape(r['clock_out'] or r['shift_status'])}</td>"
         f"<td>{escape(r['verification_status'])}</td>"
         "</tr>"
         for r in records
@@ -1335,50 +1350,69 @@ def attendance_page(request: Request):
 
     correction_panel = ""
 
-    if open_shift:
-        if pending_correction:
-            correction_panel = """
-            <div class="attendance-panel">
-                <h2>Forgotten Clock-Out</h2>
-                <p><strong>Awaiting Manager Approval</strong></p>
-                <p>Your correction request has been submitted.
-                   Your unfinished shift will remain open until
-                   an authorized manager or GM approves it.</p>
-            </div>
-            """
-        else:
-            correction_panel = f"""
-            <div class="attendance-panel">
-                <h2>Forgotten Clock-Out?</h2>
-                <p>If you forgot to clock out, enter the actual
-                   time you finished work and explain what happened.</p>
-                <p>Your manager or GM must approve the request.
-                   Your attendance will not change automatically.</p>
-                <form id="forgotten-clockout-form"
-                      action="/attendance/correction/request"
-                      method="post">
-                    {csrf_input(request)}
-                    <label for="requested-clockout">
-                        Actual Departure Date and Time
-                    </label>
-                    <input type="datetime-local"
-                           id="requested-clockout"
-                           name="requested_time"
-                           required>
-                    <label for="clockout-correction-reason">
-                        Reason for Forgotten Clock-Out
-                    </label>
-                    <textarea id="clockout-correction-reason"
-                              name="reason"
-                              maxlength="500"
-                              required
-                              placeholder="Explain why you forgot to clock out"></textarea>
-                    <button type="submit">
-                        Submit Correction Request
-                    </button>
-                </form>
-            </div>
-            """
+    if eligible_shifts:
+        shift_options = "".join(
+            f'<option value="{int(s["id"])}">'
+            f'Shift #{int(s["id"])} — '
+            f'{escape(str(s["branch"]))} — '
+            f'{escape(str(s["clock_in"]))} — '
+            f'{escape(str(s["shift_status"]))}'
+            '</option>'
+            for s in eligible_shifts
+        )
+
+        correction_panel = f"""
+        <div class="attendance-panel">
+            <h2>Forgotten Clock-Out Correction</h2>
+            <p>Select the unfinished shift you want corrected.</p>
+            <p>Your manager or GM must approve the request.</p>
+
+            <form id="forgotten-clockout-form"
+                  action="/attendance/correction/request"
+                  method="post">
+                {csrf_input(request)}
+
+                <label for="correction-attendance-id">
+                    Select Attendance Shift
+                </label>
+                <select id="correction-attendance-id"
+                        name="attendance_id"
+                        required>
+                    {shift_options}
+                </select>
+
+                <label for="requested-clockout">
+                    Actual Departure Date and Time
+                </label>
+                <input type="datetime-local"
+                       id="requested-clockout"
+                       name="requested_time"
+                       required>
+
+                <label for="clockout-correction-reason">
+                    Reason for Forgotten Clock-Out
+                </label>
+                <textarea id="clockout-correction-reason"
+                          name="reason"
+                          maxlength="500"
+                          required
+                          placeholder="Explain why you forgot to clock out"></textarea>
+
+                <button type="submit">
+                    Submit Correction Request
+                </button>
+            </form>
+        </div>
+        """
+
+    if pending_correction:
+        correction_panel += """
+        <div class="attendance-panel">
+            <h2>Pending Clock-Out Correction</h2>
+            <p><strong>Awaiting Manager Approval</strong></p>
+            <p>Your submitted correction is awaiting review.</p>
+        </div>
+        """
 
     gps_panel_start = ""
     gps_panel_end = ""
@@ -2130,7 +2164,7 @@ def attendance_in(
     except ValueError as error:
         message = str(error)
     except UniqueViolation as error:
-        if error.diag.constraint_name != "attendance_one_open_shift_per_employee":
+        if error.diag.constraint_name != "attendance_one_active_shift_per_employee":
             raise
         message = (
             "You are already clocked in. "
@@ -2152,6 +2186,7 @@ def attendance_correction_request(
     request: Request,
     requested_time: str = Form(...),
     reason: str = Form(...),
+    attendance_id: int = Form(...),
     csrf_token: str = Form("")
 ):
     validate_csrf(request, csrf_token)
@@ -2160,6 +2195,7 @@ def attendance_correction_request(
     try:
         request_id = submit_clock_out_correction(
             employee["id"],
+            attendance_id,
             requested_time,
             reason
         )
@@ -2287,7 +2323,7 @@ def gm_dashboard(request: Request):
                 (SELECT COUNT(*) FROM employees
                  WHERE is_active = 1) AS employees,
                 (SELECT COUNT(*) FROM attendance
-                 WHERE clock_out IS NULL) AS clocked_in,
+                 WHERE shift_status = 'ACTIVE') AS clocked_in,
                 (SELECT COUNT(*) FROM attendance
                  WHERE verification_status = 'PENDING') AS pending,
                 (SELECT COUNT(*) FROM gps_exception_requests
@@ -2302,7 +2338,7 @@ def gm_dashboard(request: Request):
                    AND e.is_active = 1) AS employees,
                 (SELECT COUNT(*) FROM attendance a
                  WHERE a.branch = b.name
-                   AND a.clock_out IS NULL) AS clocked_in,
+                   AND a.shift_status = 'ACTIVE') AS clocked_in,
                 (SELECT COUNT(*) FROM attendance a
                  WHERE a.branch = b.name
                    AND a.verification_status = 'PENDING') AS pending
@@ -2556,9 +2592,9 @@ def manager_dashboard(request: Request):
 
         active_shifts = conn.execute(
             "SELECT COUNT(*) FROM attendance"
-            + (" WHERE branch = ? AND clock_out IS NULL"
+            + (" WHERE branch = ? AND shift_status = 'ACTIVE'"
                if role != "GM"
-               else " WHERE clock_out IS NULL"),
+               else " WHERE shift_status = 'ACTIVE'"),
             params
         ).fetchone()[0]
 

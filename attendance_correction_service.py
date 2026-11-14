@@ -34,6 +34,7 @@ def get_open_shift(employee_id):
             FROM attendance
             WHERE employee_id = ?
               AND clock_out IS NULL
+                  AND shift_status = 'ACTIVE'
             ORDER BY id DESC
             LIMIT 1
         """, (employee_id,)).fetchone()
@@ -41,7 +42,7 @@ def get_open_shift(employee_id):
     return dict(shift) if shift else None
 
 
-def request_clock_out_correction(employee_id, requested_time, reason):
+def request_clock_out_correction(employee_id, attendance_id, requested_time, reason):
     """Submit a correction request without modifying attendance."""
 
     reason = (reason or "").strip()
@@ -78,10 +79,17 @@ def request_clock_out_correction(employee_id, requested_time, reason):
             SELECT id, employee_id, branch, clock_in
             FROM attendance
             WHERE employee_id = ?
+              AND id = ?
               AND clock_out IS NULL
-            ORDER BY id DESC
+              AND shift_status IN ('ACTIVE', 'PENDING_CORRECTION')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM attendance_correction_requests c
+                  WHERE c.attendance_id = attendance.id
+                    AND c.status = 'PENDING'
+              )
             LIMIT 1
-        """, (employee_id,)).fetchone()
+        """, (employee_id, attendance_id)).fetchone()
 
         if not shift:
             raise ValueError("No unfinished attendance shift found.")
@@ -124,14 +132,28 @@ def request_clock_out_correction(employee_id, requested_time, reason):
             reason
         ))
 
+        updated = conn.execute("""
+            UPDATE attendance
+            SET shift_status = 'PENDING_CORRECTION'
+            WHERE id = ?
+              AND employee_id = ?
+              AND shift_status IN ('ACTIVE', 'PENDING_CORRECTION')
+              AND clock_out IS NULL
+        """, (shift["id"], employee_id))
+
+        if updated.rowcount != 1:
+            raise ValueError(
+                "Attendance shift status changed. Please retry."
+            )
+
         return result.lastrowid
 
 
-def submit_clock_out_correction(employee_id, requested_time, reason):
+def submit_clock_out_correction(employee_id, attendance_id, requested_time, reason):
     """Submit a request and translate duplicate errors after rollback."""
     try:
         return request_clock_out_correction(
-            employee_id, requested_time, reason
+            employee_id, attendance_id, requested_time, reason
         )
     except UniqueViolation as error:
         if error.diag.constraint_name != "attendance_one_pending_correction":
@@ -331,19 +353,32 @@ def review_clock_out_correction(reviewer_id, correction_id, decision, remarks=""
                         other_end = other_end.replace(tzinfo=timezone.utc)
                     other_end = other_end.astimezone(timezone.utc)
 
-                if other_start < requested and (
-                    other_end is None or other_end > clock_in
-                ):
-                    raise ValueError(
-                        "Correction overlaps another attendance shift. "
-                        "Please contact the GM."
-                    )
+                # Any later shift must start at or after the
+                # corrected departure time.
+                if other_start >= clock_in:
+                    if requested > other_start:
+                        raise ValueError(
+                            "Correction overlaps a later attendance shift. "
+                            "Please contact the GM."
+                        )
+
+                # An earlier shift must have a confirmed departure
+                # no later than this shift's original clock-in.
+                else:
+                    if other_end is None or other_end > clock_in:
+                        raise ValueError(
+                            "Correction overlaps an earlier attendance shift. "
+                            "Please contact the GM."
+                        )
+
 
             result = conn.execute("""
                 UPDATE attendance
-                SET clock_out = ?
+                SET clock_out = ?,
+                    shift_status = 'CLOSED'
                 WHERE id = ?
                   AND employee_id = ?
+                    AND shift_status = 'PENDING_CORRECTION'
                   AND clock_out IS NULL
             """, (
                 requested.isoformat(),

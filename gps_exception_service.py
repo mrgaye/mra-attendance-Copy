@@ -52,7 +52,8 @@ def request_gps_exception(
 
         open_shift = conn.execute("""
             SELECT id FROM attendance
-            WHERE employee_id = ? AND clock_out IS NULL
+            WHERE employee_id = ? AND shift_status = 'ACTIVE'
+                    AND clock_out IS NULL
             LIMIT 1
         """, (employee_id,)).fetchone()
 
@@ -199,7 +200,8 @@ def review_gps_exception(
             open_shift = conn.execute("""
                 SELECT id FROM attendance
                 WHERE employee_id = ?
-                  AND clock_out IS NULL
+                  AND shift_status = 'ACTIVE'
+                      AND clock_out IS NULL
                 LIMIT 1
             """, (record["employee_id"],)).fetchone()
 
